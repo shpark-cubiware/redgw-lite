@@ -1,0 +1,16 @@
+[package]
+name = "redgw_core"
+version = "0.1.1"
+edition = "2021"
+description = "RedGW Rust core — key validation, template rendering, hash computation"
+
+[lib]
+name = "redgw_core"
+crate-type = ["cdylib"]
+
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+pyo3 = { version = "0.28" }

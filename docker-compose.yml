@@ -1,0 +1,217 @@
+services:
+  redis:
+    image: redis:7.2.14-alpine
+    container_name: redgw-lite-redis
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+      --lazyfree-lazy-eviction yes
+      --lazyfree-lazy-expire yes
+      --lazyfree-lazy-server-del yes
+      --lazyfree-lazy-user-del yes
+      --requirepass ${REDIS_PASSWORD}
+      --rename-command FLUSHALL ""
+      --rename-command CONFIG ""
+    # ports 미노출 — Docker 내부 네트워크에서만 접근 가능
+    expose:
+      - "6379"
+    # 볼륨 없음 — 인메모리 전용 (비영속 원칙)
+    networks:
+      - redgw-lite-net
+    restart: unless-stopped
+    # 리소스 제한: memory = maxmemory(256MB) + 프로세스 오버헤드(~64MB)
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 320M
+
+
+  redgw:
+    # 태그는 .env의 REDGW_VERSION으로 치환 (build.sh가 빌드한 redgw:<버전>과 일치해야 함).
+    image: redgw-lite:${REDGW_VERSION}
+    container_name: redgw-lite-app
+    # 외부 노출 없음 — Nginx를 통해서만 접근
+    expose:
+      - "8080"
+    # ※ .env 변수를 컨테이너에 전달하려면 여기에 명시해야 합니다.
+    #    .env에만 있고 여기에 없으면 컨테이너 내부에서 읽을 수 없습니다.
+    environment:
+      - TZ=Asia/Seoul
+      # glibc malloc 아레나 수 제한 (RSS 단편화 완화). 주의: jemalloc이 LD_PRELOAD로
+      # 올라가면 glibc malloc은 호출되지 않아 이 값은 평시 무효 — jemalloc preload 실패 시의
+      # glibc 폴백 전용으로만 유지한다(jemalloc과 협동하지 않음). RSS 환원은 jemalloc MALLOC_CONF로.
+      - MALLOC_ARENA_MAX=2
+      - REDGW_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - REDGW_CONFIG=/app/config/config.yaml
+      - REDGW_CLIENT_MONITOR_API_KEY=${REDGW_CLIENT_MONITOR_API_KEY:-}
+      - REDGW_ADMIN_API_KEY=${REDGW_ADMIN_API_KEY:-}
+      - REDGW_CORS_ORIGINS=${REDGW_CORS_ORIGINS:-}
+      # ──────────────────────────────────────────────────────────────────
+      # ── 클라이언트 API 키 (초기 배포: HRM/ERP/CRM) ──
+      - REDGW_CLIENT_HRM_API_KEY=${REDGW_CLIENT_HRM_API_KEY:-}
+      - REDGW_CLIENT_ERP_API_KEY=${REDGW_CLIENT_ERP_API_KEY:-}
+      - REDGW_CLIENT_CRM_API_KEY=${REDGW_CLIENT_CRM_API_KEY:-}
+      # ── 추가 클라이언트 (필요 시 주석 해제 + .env에 키 추가) ──
+      - REDGW_CLIENT_WMS_API_KEY=${REDGW_CLIENT_WMS_API_KEY:-}
+      - REDGW_CLIENT_FMS_API_KEY=${REDGW_CLIENT_FMS_API_KEY:-}
+
+      # ── Rust 모듈 비활성화 (벤치마크 비교용, 기본: 비활성화 안 함)
+      - REDGW_DISABLE_RUST=${REDGW_DISABLE_RUST:-}
+
+    volumes:
+      - ./config:/app/config:ro
+      - ./log:/app/log
+      - ./tests:/app/tests:ro
+      - ./scripts:/app/scripts:ro
+    depends_on:
+      - redis
+    networks:
+      - redgw-lite-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+
+
+  nginx:
+    image: nginx:1.29.5-alpine
+    container_name: redgw-lite-nginx
+    ports:
+      - "3443:443"
+      - "3080:8080"
+    environment:
+      - REDGW_ADMIN_API_KEY=${REDGW_ADMIN_API_KEY:-}
+      - REDGW_CLIENT_HRM_API_KEY=${REDGW_CLIENT_HRM_API_KEY:-}
+      - REDGW_CLIENT_ERP_API_KEY=${REDGW_CLIENT_ERP_API_KEY:-}
+      - REDGW_CLIENT_CRM_API_KEY=${REDGW_CLIENT_CRM_API_KEY:-}
+      - REDGW_CLIENT_MONITOR_API_KEY=${REDGW_CLIENT_MONITOR_API_KEY:-}
+    # envsubst: ${REDGW_ADMIN_API_KEY}만 치환, nginx $변수($host 등)는 그대로 유지
+    command:
+      - sh
+      - -c
+      - "until [ -f /etc/nginx/nginx.conf.template ]; do sleep 0.1; done && envsubst '$$REDGW_ADMIN_API_KEY' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'"
+    volumes:
+      - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - redgw
+    networks:
+      - redgw-lite-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+
+  # ─── Monitoring ───────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v3.9.1
+    container_name: redgw-lite-prometheus
+    # 외부 노출 없음 — Grafana가 Docker 내부에서 접근
+    expose:
+      - "9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--storage.tsdb.retention.size=512MB'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    depends_on:
+      - nginx
+    networks:
+      - redgw-lite-net
+    restart: unless-stopped
+    # 리소스 제한: memory = storage.tsdb.retention.size(512MB) 기준
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+
+  grafana:
+    image: grafana/grafana:12.3.3
+    container_name: redgw-lite-grafana
+    ports:
+      - "3300:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/redgw.json
+      # Cubiware CI 브랜딩
+      - GF_APP_MODE=production
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+      # ── Cubiware CI 브랜딩 ──
+      # grafana_icon: 3개 경로 모두 교체 (로딩화면·사이드바·SPA)
+      - ./grafana/branding/redgw_icon.svg:/usr/share/grafana/public/img/grafana_icon.svg:ro
+      - ./grafana/branding/redgw_icon.svg:/usr/share/grafana/public/build/img/grafana_icon.svg:ro
+      - ./grafana/branding/redgw_icon.svg:/usr/share/grafana/public/build/static/img/grafana_icon.1e0deb6b.svg:ro
+      # favicon / apple-touch-icon
+      - ./grafana/branding/favicon.png:/usr/share/grafana/public/img/fav32.png:ro
+      - ./grafana/branding/favicon.png:/usr/share/grafana/public/build/img/fav32.png:ro
+      - ./grafana/branding/apple-touch-icon.png:/usr/share/grafana/public/img/apple-touch-icon.png:ro
+      - ./grafana/branding/apple-touch-icon.png:/usr/share/grafana/public/build/img/apple-touch-icon.png:ro
+    depends_on:
+      - prometheus
+    networks:
+      - redgw-lite-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+
+
+  # ─── 개발/유지보수용 (운영 시 주석 처리) ──────────────────
+  # RedisInsight: Redis 데이터 확인용 GUI (http://localhost:3540)
+  # 사용법: `docker compose up -d redisinsight` (restart:"no" — 기본 자동 기동 안 함)
+  # 시작 시 Redis 연결이 자동 등록됨 (init.sh → /api/databases). 운영 시 아래 블록을 주석 처리.
+  #
+  redisinsight:
+    image: redis/redisinsight:3.0.3
+    container_name: redgw-lite-redisinsight
+    ports:
+      - "3540:5540"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - redisinsight_data:/data
+      - ./redisinsight/init.sh:/init.sh:ro
+    entrypoint: ["sh", "/init.sh"]
+    depends_on:
+      - redis
+    networks:
+      - redgw-lite-net
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  redisinsight_data:
+
+
+networks:
+  redgw-lite-net:
+    driver: bridge

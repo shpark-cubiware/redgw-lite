@@ -1,0 +1,246 @@
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /tmp/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # ─── 기본 설정 ─────────────────────────────────────────────
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] '
+                    '"$request" $status $body_bytes_sent '
+                    '"$http_referer" "$http_user_agent"';
+    access_log /var/log/nginx/access.log main;
+
+    sendfile on;
+    keepalive_timeout 65;
+    client_max_body_size 2m;
+
+    # WebSocket 업그레이드 헤더 매핑 — Upgrade 부재 시 Connection: close (표준 idiom).
+    # /ws/ location이 Connection을 이 변수로 설정해, Upgrade 없는 일반 요청이
+    # 'Connection: upgrade'로 백엔드에 전달돼 커넥션이 어긋나는 것을 방지한다.
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    # ─── 보안: 서버 정보 숨김 ──────────────────────────────────
+    server_tokens off;
+
+    # ─── 리다이렉트는 항상 상대 경로로 ─────────────────────────
+    # Nginx가 만드는 리다이렉트(상대 return 301, 디렉토리 자동 슬래시 등)에
+    # listen 포트(443/8080)를 박아넣지 않도록 한다. 외부 노출 포트(3443/3080)와
+    # 내부 listen 포트가 다르므로 절대 URL로 조립하면 잘못된 포트로 튄다.
+    # 상대 Location을 내보내면 브라우저가 원래 요청 호스트·포트로 해석한다.
+    absolute_redirect off;
+
+    # ─── Rate Limiting 설정 ────────────────────────────────────
+    # IP당 초당 10개 요청 허용 (버스트 20)
+    limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+    limit_req_status 429;
+
+    # ─── 응답 압축 ───────────────────────────────────────────
+    gzip on;
+    gzip_types application/json text/plain;
+    gzip_min_length 1024;       # 1KB 미만은 압축 생략
+    gzip_comp_level 4;          # 속도·압축률 균형점
+    gzip_vary on;               # Vary: Accept-Encoding 헤더
+
+    # ─── 백엔드 upstream (keep-alive 커넥션 풀) ────────────────
+    # 미설정 시 nginx는 백엔드에 HTTP/1.0로 붙어 요청마다 새 TCP를 맺었다 끊는다.
+    # keep-alive 풀로 커넥션을 재사용 → 핸드셰이크 1 RTT + TIME_WAIT 누적 제거(소형 읽기일수록 효과).
+    # keepalive 16 = 워커당 유지할 idle 커넥션 수(gunicorn 워커 4의 ~2배).
+    # 사용하는 location은 proxy_http_version 1.1 + proxy_set_header Connection "" 필수.
+    upstream redgw_backend {
+        server redgw:8080;
+        keepalive 16;
+    }
+
+    # ─── HTTPS 서버 ────────────────────────────────────────────
+    server {
+        listen 443 ssl;
+        server_name _;
+
+        # TLS 설정
+        ssl_certificate     /etc/nginx/certs/server.crt;
+        ssl_certificate_key /etc/nginx/certs/server.key;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+        ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 10m;
+
+        # ─── 보안 헤더 ────────────────────────────────────────
+        add_header X-Frame-Options DENY always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
+
+        # ─── API Tutorial 정적 페이지 ────────────────────────
+        location = /tutorial { return 301 /tutorial/; }
+        location = /tutorial/env.js {
+            alias /tmp/tutorial-env.js;
+            add_header Content-Type "application/javascript; charset=utf-8" always;
+            add_header Cache-Control "no-store" always;
+        }
+        location /tutorial/ {
+            alias /usr/share/nginx/html/tutorial/;
+            index index.html;
+            add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; frame-ancestors 'none'" always;
+            add_header X-Content-Type-Options nosniff always;
+        }
+
+        # ─── 사용자 메뉴얼 정적 페이지 ──────────────────────────
+        location = /usermanual { return 301 /usermanual/; }
+        location /usermanual/ {
+            alias /usr/share/nginx/html/usermanual/;
+            index index.html;
+            add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'" always;
+            add_header X-Content-Type-Options nosniff always;
+        }
+
+        # ─── WebSocket 프록시 (/ws/ → /api/v1/ws/) ────────────
+        location /ws/ {
+            proxy_pass http://redgw:8080/api/v1/ws/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_read_timeout 60s;
+        }
+
+        # ─── API 프록시 ───────────────────────────────────────
+        location / {
+            limit_req zone=api burst=20 nodelay;
+
+            # keep-alive upstream 사용 — proxy_http_version 1.1 + Connection "" 필수
+            # (Connection "" 누락 시 클라가 보낸 Connection 헤더가 전파돼 keepalive 무력화)
+            proxy_pass http://redgw_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # 타임아웃
+            proxy_connect_timeout 10s;
+            proxy_read_timeout 60s;
+            proxy_send_timeout 60s;
+        }
+
+        # ─── 헬스체크 (Rate Limit 제외) ───────────────────────
+        location = /health {
+            proxy_pass http://redgw:8080/health;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # ─── Prometheus 메트릭 (내부 네트워크 전용) ──────────
+        location = /metrics {
+            allow 10.0.0.0/8;
+            allow 172.16.0.0/12;
+            allow 192.168.0.0/16;
+            allow 127.0.0.1;
+            deny all;
+            proxy_pass http://redgw:8080/api/v1/metrics;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+
+    # ─── HTTP → HTTPS 리다이렉트 ──────────────────────────────
+    server {
+        listen 8080;
+        server_name _;
+
+        # 개발/내부 헬스체크용 HTTP 접근 (선택적)
+        location = / {
+            proxy_pass http://redgw:8080/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+        location = /health {
+            proxy_pass http://redgw:8080/health;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # API Tutorial 정적 페이지 (HTTP)
+        location = /tutorial { return 301 /tutorial/; }
+        location = /tutorial/env.js {
+            alias /tmp/tutorial-env.js;
+            add_header Content-Type "application/javascript; charset=utf-8" always;
+            add_header Cache-Control "no-store" always;
+        }
+        location /tutorial/ {
+            alias /usr/share/nginx/html/tutorial/;
+            index index.html;
+            add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; frame-ancestors 'none'" always;
+            add_header X-Content-Type-Options nosniff always;
+        }
+
+        # 사용자 메뉴얼 정적 페이지 (HTTP)
+        location = /usermanual { return 301 /usermanual/; }
+        location /usermanual/ {
+            alias /usr/share/nginx/html/usermanual/;
+            index index.html;
+            add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'" always;
+            add_header X-Content-Type-Options nosniff always;
+        }
+
+        # Tutorial 페이지용 API 프록시 (HTTP) — /api/v1 이하 모든 엔드포인트
+        location /api/ {
+            # keep-alive upstream 사용 (HTTPS location /와 동일)
+            proxy_pass http://redgw_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        # ─── Prometheus 스크래핑 전용 (API 키 자동 주입) ──────
+        # envsubst가 ${REDGW_ADMIN_API_KEY}만 치환, nginx $변수는 그대로 유지
+        location = /prometheus/metrics {
+            allow 10.0.0.0/8;
+            allow 172.16.0.0/12;
+            allow 192.168.0.0/16;
+            allow 127.0.0.1;
+            deny all;
+            proxy_pass http://redgw:8080/api/v1/metrics;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-API-Key "${REDGW_ADMIN_API_KEY}";
+        }
+
+        location /ws/ {
+            proxy_pass http://redgw:8080/api/v1/ws/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_read_timeout 60s;
+        }
+
+        # 나머지는 HTTPS로 리다이렉트
+        # 주의: 호스트 외부 노출 HTTPS 포트가 2443이므로 리다이렉트 URL에 포트를 명시한다.
+        # (docker-compose.yml의 "3443:443" 매핑과 일치해야 한다.)
+        location / {
+            return 301 https://$host:3443$request_uri;
+        }
+    }
+}

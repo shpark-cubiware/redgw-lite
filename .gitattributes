@@ -1,0 +1,6 @@
+# 한글 텍스트 파일 인코딩 보장
+*.md          text eol=lf
+*.py          text eol=lf
+*.yaml        text eol=lf
+*.yml         text eol=lf
+*.sh          text eol=lf

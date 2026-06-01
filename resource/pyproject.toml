@@ -1,0 +1,21 @@
+[project]
+name = "redgw-lite"
+version = "0.1.2"
+description = "Redis Gateway — REST middleware for inter-system data sharing"
+requires-python = ">=3.11"
+authors = [
+    { name = "Cubiware Co., Ltd.", email = "shpark@cubiware.co.kr" },
+]
+maintainers = [
+    { name = "Cubiware Co., Ltd.", email = "shpark@cubiware.co.kr" },
+]
+keywords = ["redis", "gateway", "rest", "middleware", "cubiware"]
+
+[project.urls]
+Homepage = "https://www.cubiware.co.kr"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]

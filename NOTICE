@@ -1,0 +1,12 @@
+RedGW-lite
+Copyright (c) Cubiware Co., Ltd.
+
+This product is the public (Apache-2.0) edition of RedGW, a Redis-based
+REST gateway. It is generated as a one-way derived mirror from the
+internal RedGW source by scripts/derive_lite.sh.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0

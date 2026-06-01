@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Cubiware CI Logo — white + magenta cube -->
+  <!-- Left face (white) -->
+  <polygon points="100,25 35,65 35,170 100,130" fill="#FFFFFF"/>
+  <!-- Right face (magenta) -->
+  <polygon points="100,25 165,65 165,170 100,130" fill="#E91E8C"/>
+</svg>

@@ -1,0 +1,146 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  workers: 4
+  cors_origins: []
+
+redis:
+  url: "redis://localhost:6379/0"
+  max_connections: 50
+  decode_responses: true
+  socket_timeout: 5
+  retry_on_timeout: true
+
+namespace:
+  separator: ":"
+  max_key_length: 256
+
+# =============================================================================
+# Clients
+# =============================================================================
+# What is a client?
+#   A system that connects to RedGW to read and write data.
+#   RedGW itself is a REST gateway in front of the data store (Redis); every
+#   system that uses the gateway needs its own client definition.
+#
+# Client types:
+#   ┌──────────────────┬──────────────────────────────────────────────┐
+#   │ Type             │ Description                                    │
+#   ├──────────────────┼──────────────────────────────────────────────┤
+#   │ Participating    │ External systems that exchange data via RedGW  │
+#   │ system           │ e.g. HRM, ERP, CRM                             │
+#   │                  │ → read+write on own NS, read on others         │
+#   ├──────────────────┼──────────────────────────────────────────────┤
+#   │ Monitoring       │ Internal system that observes RedGW status     │
+#   │                  │ e.g. MONITOR                                   │
+#   │                  │ → read-only on all namespaces ("*": [read])    │
+#   ├──────────────────┼──────────────────────────────────────────────┤
+#   │ Admin            │ Full access for operations (see admin section) │
+#   │                  │ → read+write on all namespaces                 │
+#   └──────────────────┴──────────────────────────────────────────────┘
+#
+# Role of the API key:
+#   1. Authentication — verifies the caller is a registered system (401 if not)
+#   2. Identification — records which system made the request in logs/audit
+#   3. Authorization — controls accessible namespaces and permissions per system (403 if not allowed)
+#
+# Namespace permissions:
+#   Each client is granted [read], [write], or [read, write] per accessible namespace.
+#   - Own namespace: usually read + write (manages its own data)
+#   - Other systems' namespaces: usually read (read-only access to their data)
+#   - shared namespace: for data shared between systems
+#   - "*" wildcard: grants the given permission on all namespaces
+#
+# API key format: redgw_ak_{clientID}_{random}
+#   - redgw_  : project prefix (distinguishes from other services' keys)
+#   - ak_     : API key marker
+#   - {ID}_   : client identifier (so a leaked key is immediately attributable)
+#   - {random}: cryptographic random (e.g. generated with openssl rand -hex 16)
+#
+# The api_key values below are placeholders.
+# Real keys are overridden by the REDGW_CLIENT_{ID}_API_KEY environment variables in .env.
+# =============================================================================
+
+# ── Participating systems: external systems that exchange data via RedGW ──
+clients:
+  HRM:
+    api_key: "redgw_ak_hrm_CHANGE_ME"
+    description: "HR management system"
+    namespaces:
+      HRM: [read, write]
+      shared: [read, write]
+      ERP: [read]
+
+  ERP:
+    api_key: "redgw_ak_erp_CHANGE_ME"
+    description: "Enterprise resource planning system"
+    namespaces:
+      ERP: [read, write]
+      shared: [read, write]
+      HRM: [read]
+      CRM: [read]
+
+  CRM:
+    api_key: "redgw_ak_crm_CHANGE_ME"
+    description: "Sales/customer management system"
+    namespaces:
+      CRM: [read, write]
+      shared: [read, write]
+      ERP: [read]
+
+  FMS:
+    api_key: "redgw_ak_fms_CHANGE_ME"
+    description: "Financial management system"
+    namespaces:
+      FMS: [read, write]
+
+  WMS:
+    api_key: "redgw_ak_wms_CHANGE_ME"
+    description: "Warehouse/inventory management system"
+    namespaces:
+      WMS: [read, write]       # write required since an external system records data here
+
+  # ── Monitoring: internal system that observes RedGW status ──
+  MONITOR:
+    api_key: "redgw_ak_monitor_CHANGE_ME"
+    description: "Monitoring system"
+    namespaces:
+      "*": [read]              # all namespaces: read-only
+
+defaults:
+  ttl: 86400
+  max_list_length: 10000
+  max_stream_length: 50000
+  max_value_size: 1048576
+
+# ── Admin: full access for operations/administration ──
+admin:
+  api_key: "redgw_admin_CHANGE_ME"
+
+logging:
+  level: "INFO"
+  # Operational logs (MAIN/CONFIG/STATUS/AccessLog) prioritize real-time human readability — fixed to plain.
+  # Structured analysis is handled by the separate audit log (/app/audit/, one-line JSON).
+  format: "plain"
+  access_log: true
+
+# Audit log — captures user actions, authentication, NS authorization denials, and admin operations.
+# Written as one-line JSON in a directory (/app/audit/) separate from the operational logs.
+# Level definitions:
+#   0 = OFF (speed first — forbidden in production; prints 3 WARNING lines at boot)
+#   1 = BASIC (default — captures write/delete/auth-failure/admin)
+#   2 = FULL (Level 1 + read + Pub/Sub publish + payload_prefix opt-in)
+audit:
+  level: 1
+  directory: "/app/audit"
+  max_file_size_mb: 10        # per-file rotation threshold
+  retention_days: 30          # automatic deletion by age
+  max_total_size_mb: 1024     # directory-wide cap (0 = unlimited; oldest .gz deleted first when exceeded)
+  disk_min_free_pct: 10       # prints a LOW DISK warning at boot if free space drops below this
+  payload_prefix_bytes: 0     # Level 2 opt-in (0 = hash only, >0 = first N bytes in plaintext)
+  exclude_paths: ["/health", "/metrics", "/api/v1/metrics", "/"]  # nginx rewrites to /api/v1/metrics
+  per_worker_files: false     # if true: audit.YYYYMMDD.w{pid}.log — avoids multi-worker interleaving
+  # Q3 Correlation ID — an API write records origin metadata (requester, timestamp) in Redis, queryable via the admin API by origin_request_id
+  # Adds one Redis SET on the hot path — enable only when causal tracing is needed (air-gapped / multi-system integration)
+  correlation: false
+  correlation_ttl_seconds: 86400

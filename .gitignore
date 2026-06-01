@@ -1,0 +1,40 @@
+# 시크릿
+.env
+!.env.example
+
+# TLS 인증서
+nginx/certs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# DML 로그
+log/
+
+# OS
+.DS_Store
+
+# Rust build artifacts
+redgw_core/target/
+redgw_core/Cargo.lock
+
+# etc: *.tar *.tar.gz *.zip
+*.tar
+*.tar.gz
+*.zip
+
+config/*.yaml.*
+# ── lite 전용: 공개 저장소에 포함하지 않는 dev 보조 파일 (derive_lite.sh 2d) ──
+restart.sh
+config/config.example.yaml
+scripts/benchmark_audit_compare.sh
+scripts/rust_test.sh
+scripts/test_gzip_over1k.sh
+scripts/test_gzip_under1k.sh
