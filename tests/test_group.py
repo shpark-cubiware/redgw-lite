@@ -29,7 +29,7 @@ Redis 키 형식: {ns}:grp:{key}
 
 from httpx import AsyncClient
 
-from tests.conftest import HRM_KEY, ERP_KEY
+from tests.conftest import HRM_KEY, ERP_KEY, MONITOR_KEY
 
 
 class TestGroupCrud:
@@ -515,3 +515,52 @@ class TestGroupAddTtlZero:
         )
         assert resp.status_code == 200
         assert resp.json()["meta"]["ttl"] == -1
+
+
+class TestGroupDelete:
+    """전체 키 삭제 (DEL) — 멤버 단위 SREM과 구분되는 통째 삭제"""
+
+    async def test_delete_whole_group(self, client: AsyncClient):
+        """Set 생성 후 전체 삭제 → 200, deleted=true. 이후 count=0."""
+        await client.post(
+            "/api/v1/ns/HRM/group/del-target",
+            headers={"X-API-Key": HRM_KEY},
+            json={"members": ["a", "b"]},
+        )
+        resp = await client.delete(
+            "/api/v1/ns/HRM/group/del-target",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"]["deleted"] is True
+        assert body["meta"]["type"] == "set"
+
+        resp = await client.get(
+            "/api/v1/ns/HRM/group/del-target/count",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.json()["data"]["count"] == 0
+
+    async def test_delete_absent_group_404(self, client: AsyncClient):
+        """없는 키 삭제 → 404 KEY_NOT_FOUND."""
+        resp = await client.delete(
+            "/api/v1/ns/HRM/group/no-such-key",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"]["code"] == "KEY_NOT_FOUND"
+
+    async def test_delete_requires_write(self, client: AsyncClient):
+        """read-only 키(MONITOR)는 전체 삭제 거부 → 403 NAMESPACE_DENIED."""
+        await client.post(
+            "/api/v1/ns/HRM/group/ro-guard",
+            headers={"X-API-Key": HRM_KEY},
+            json={"members": ["a"]},
+        )
+        resp = await client.delete(
+            "/api/v1/ns/HRM/group/ro-guard",
+            headers={"X-API-Key": MONITOR_KEY},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"]["code"] == "NAMESPACE_DENIED"

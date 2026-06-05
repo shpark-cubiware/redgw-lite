@@ -10,8 +10,8 @@ TEST_DIR="$PROJECT_DIR/tests"
 export REDGW_BASE_URL="${REDGW_BASE_URL:-http://localhost:3080}"
 BASE_URL="$REDGW_BASE_URL"
 
-# .env 로드
-[ -f "$PROJECT_DIR/.env" ] && source "$PROJECT_DIR/.env"
+# .env는 각 자식 테스트(tests/test_0*.sh)가 직접 source한다 — 여기선 사용하지 않으므로
+# 로드 안 함(rule 02: .env의 $ 특수문자가 현재 셸에서 source 시 변수 오염). 자식은 서브셸로 격리.
 
 echo "============================================================"
 echo " RedGW curl 테스트 전체 실행"

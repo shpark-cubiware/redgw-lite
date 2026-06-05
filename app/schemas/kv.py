@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field, field_validator
 
 class KvSetRequest(BaseModel):
     value: str = Field(..., min_length=1)
-    ttl: int | None = Field(None, ge=0)
+    # le: Redis EXPIRE/SETEX 한계 초과 ttl이 ResponseError→500으로 새는 것을 입력단에서 차단
+    # (KvIncrRequest.delta 바운드와 동일 취지). ~316년이면 운영상 충분.
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)
 
 
 class KvIncrRequest(BaseModel):
@@ -24,7 +26,9 @@ class KvBatchGetRequest(BaseModel):
 
 class KvBatchSetRequest(BaseModel):
     items: dict[str, str] = Field(..., min_length=1, max_length=100)
-    ttl: int | None = Field(None, ge=0)
+    # le: Redis EXPIRE/SETEX 한계 초과 ttl이 ResponseError→500으로 새는 것을 입력단에서 차단
+    # (KvIncrRequest.delta 바운드와 동일 취지). ~316년이면 운영상 충분.
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)
 
     @field_validator("items")
     @classmethod

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class GroupAddRequest(BaseModel):
     members: list[str] = Field(..., min_length=1)
-    ttl: int | None = Field(None, ge=0)
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)  # le: Redis EXPIRE 한계 초과 ttl의 500 누수 차단
 
 
 class GroupBatchGetRequest(BaseModel):
@@ -16,7 +16,7 @@ class GroupBatchGetRequest(BaseModel):
 
 class GroupBatchAddRequest(BaseModel):
     items: dict[str, list[str]] = Field(..., min_length=1, max_length=100)
-    ttl: int | None = Field(None, ge=0)
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)  # le: Redis EXPIRE 한계 초과 ttl의 500 누수 차단
 
     @field_validator("items")
     @classmethod

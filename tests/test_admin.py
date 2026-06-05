@@ -148,6 +148,27 @@ class TestAdminKeys:
         page_keys = [k for k in all_keys if "page-" in k]
         assert len(page_keys) >= 3
 
+    async def test_list_keys_ns_denied_for_unauthorized(self, client: AsyncClient):
+        """구체 NS 지정 시 read 권한 없는 클라이언트는 403 — 타 NS 키 열거 차단.
+
+        HRM 클라이언트는 CRM NS에 read 권한이 없다(config: HRM/shared/ERP만).
+        데이터 플레인과 동일하게 admin 메타데이터 조회도 NS read를 강제한다.
+        """
+        resp = await client.get(
+            "/api/v1/admin/keys?ns=CRM",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"]["code"] == "NAMESPACE_DENIED"
+
+    async def test_list_keys_ns_allowed_for_authorized(self, client: AsyncClient):
+        """read 권한이 있는 NS는 정상 조회 — HRM은 ERP에 read 권한 보유."""
+        resp = await client.get(
+            "/api/v1/admin/keys?ns=ERP",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 200
+
 
 class TestAdminKeyInfo:
     """키 상세 정보 테스트"""
@@ -193,6 +214,18 @@ class TestAdminKeyInfo:
             headers={"X-API-Key": ADMIN_KEY},
         )
         assert resp.status_code == 404
+
+    async def test_info_ns_denied_for_unauthorized(self, client: AsyncClient):
+        """단일 키 메타데이터도 read 권한 없는 NS는 403 — HRM은 CRM에 권한 없음.
+
+        키 존재 여부(404)보다 인가 검사(403)가 먼저 — 존재 누설 방지.
+        """
+        resp = await client.get(
+            "/api/v1/admin/info/CRM/kv/whatever",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"]["code"] == "NAMESPACE_DENIED"
 
 
 def test_storage_prefixes_accepted_as_type():
@@ -446,6 +479,33 @@ class TestAdminBulkDelete:
             headers={"X-API-Key": HRM_KEY},
         )
         assert resp.status_code == 403
+
+    async def test_bulk_delete_rejects_invalid_glob_pattern(self, client: AsyncClient):
+        """pattern에 저장 키 charset 밖 glob 문자([, ], \\, 공백)가 있으면 400 INVALID_KEY.
+
+        정상 키에는 이 문자들이 등장할 수 없으므로 거부해도 매칭 손실이 없다(입력단 defense-in-depth).
+        """
+        for bad in ("foo[ab]", "foo\\bar", "a b"):
+            resp = await client.delete(
+                "/api/v1/admin/keys/bulk",
+                params={"ns": "HRM", "type": "kv", "pattern": bad},
+                headers={"X-API-Key": ADMIN_KEY},
+            )
+            assert resp.status_code == 400, f"pattern={bad!r}"
+            assert resp.json()["detail"]["error"]["code"] == "INVALID_KEY"
+
+    async def test_list_keys_rejects_invalid_glob_pattern(self, client: AsyncClient):
+        """GET /admin/keys도 동일하게 키 charset 밖 glob pattern을 400으로 거부.
+
+        정상 glob(`*`, `?`)과 키 문자는 통과(test_bulk_delete가 `bulk-del-*`로 커버).
+        """
+        resp = await client.get(
+            "/api/v1/admin/keys",
+            params={"ns": "HRM", "type": "kv", "pattern": "a[bc]"},
+            headers={"X-API-Key": ADMIN_KEY},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["code"] == "INVALID_KEY"
 
 
 class TestAdminMetrics:

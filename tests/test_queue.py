@@ -21,7 +21,7 @@ Redis 키 형식: {ns}:q:{key}
 
 from httpx import AsyncClient
 
-from tests.conftest import HRM_KEY, ERP_KEY
+from tests.conftest import HRM_KEY, ERP_KEY, MONITOR_KEY
 
 
 class TestQueueCrud:
@@ -411,3 +411,52 @@ class TestQueueBatchTtlZero:
         )
         assert resp.status_code == 200
         assert resp.json()["meta"]["ttl"] == -1
+
+
+class TestQueueDelete:
+    """전체 키 삭제 (DEL) — 연결 키의 NS write 권한으로 삭제"""
+
+    async def test_delete_whole_queue(self, client: AsyncClient):
+        """큐 생성 후 전체 삭제 → 200, deleted=true. 이후 len=0."""
+        await client.post(
+            "/api/v1/ns/HRM/queue/del-target",
+            headers={"X-API-Key": HRM_KEY},
+            json={"value": "a", "direction": "right"},
+        )
+        resp = await client.delete(
+            "/api/v1/ns/HRM/queue/del-target",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"]["deleted"] is True
+        assert body["meta"]["type"] == "list"
+
+        resp = await client.get(
+            "/api/v1/ns/HRM/queue/del-target/len",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.json()["data"]["length"] == 0
+
+    async def test_delete_absent_queue_404(self, client: AsyncClient):
+        """없는 키 삭제 → 404 KEY_NOT_FOUND."""
+        resp = await client.delete(
+            "/api/v1/ns/HRM/queue/no-such-key",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"]["code"] == "KEY_NOT_FOUND"
+
+    async def test_delete_requires_write(self, client: AsyncClient):
+        """read-only 키(MONITOR)는 전체 삭제 거부 → 403 NAMESPACE_DENIED."""
+        await client.post(
+            "/api/v1/ns/HRM/queue/ro-guard",
+            headers={"X-API-Key": HRM_KEY},
+            json={"value": "a", "direction": "right"},
+        )
+        resp = await client.delete(
+            "/api/v1/ns/HRM/queue/ro-guard",
+            headers={"X-API-Key": MONITOR_KEY},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"]["code"] == "NAMESPACE_DENIED"

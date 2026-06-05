@@ -15,7 +15,7 @@ from app.schemas.common import ClientInfo
 from app.schemas.admin import TtlSetRequest
 from app.schemas.rank import RankAddRequest, RankBatchAddRequest, RankBatchGetRequest, RankIncrRequest
 from app.utils.key_builder import RANK_PREFIX, build_key
-from app.utils.response import error, ok
+from app.utils.response import error, not_found, ok
 from app.utils.ttl import resolve_ttl, touch_key
 from app.utils.validation import check_value_size
 
@@ -64,10 +64,11 @@ async def batch_add_rank(
     require_write(client, ns)
     for item in body.members:
         check_value_size(item.member, label="Member")
-        # nan은 Redis 접촉 전에 거부 — 사후(ZADD ResponseError) 거부는 같은 파이프라인의
+        # nan/inf는 Redis 접촉 전에 거부 — 사후(ZADD ResponseError) 거부는 같은 파이프라인의
         # EXPIRE/PERSIST가 이미 실행돼 키 TTL을 부수효과로 바꾼다(거부된 쓰기인데 TTL 변경).
-        if math.isnan(item.score):
-            raise error("INVALID_VALUE", "Score is not a valid number (nan)", status=400)
+        # inf는 ZADD가 받아 저장하나 JSON 응답에서 null로 직렬화돼 API로 회수 불가 → 입력단 거부.
+        if not math.isfinite(item.score):
+            raise error("INVALID_VALUE", "Score must be a finite number (nan/inf rejected)", status=400)
     redis_key = build_key(ns, RANK_PREFIX, key)
     mapping = {item.member: item.score for item in body.members}
     # ZADD는 기존 TTL 보존 → zadd·(조건)expire·ttl을 단일 파이프라인으로 3→1 왕복
@@ -100,10 +101,11 @@ async def add_rank(
 ) -> dict:
     require_write(client, ns)
     check_value_size(body.member, label="Member")
-    # nan은 Redis 접촉 전에 거부 — 사후 거부 시 같은 파이프라인의 EXPIRE/PERSIST가 이미
+    # nan/inf는 Redis 접촉 전에 거부 — 사후 거부 시 같은 파이프라인의 EXPIRE/PERSIST가 이미
     # 실행돼 키 TTL을 부수효과로 바꾼다(거부된 쓰기인데 TTL 변경).
-    if math.isnan(body.score):
-        raise error("INVALID_VALUE", "Score is not a valid number (nan)", status=400)
+    # inf는 ZADD가 받아 저장하나 JSON 응답에서 null로 직렬화돼 API로 회수 불가 → 입력단 거부.
+    if not math.isfinite(body.score):
+        raise error("INVALID_VALUE", "Score must be a finite number (nan/inf rejected)", status=400)
     redis_key = build_key(ns, RANK_PREFIX, key)
     # ZADD는 기존 TTL 보존 → zadd·(조건)expire·ttl을 단일 파이프라인으로 3→1 왕복
     ttl = resolve_ttl(body.ttl)
@@ -184,6 +186,21 @@ async def between_rank(
     return ok({"members": members, "count": len(members)}, ns=ns, key=key, type="zset")
 
 
+@router.delete("/ns/{ns}/rank/{key}", summary="전체 삭제 (DEL)")
+async def delete_rank(
+    ns: str,
+    key: str,
+    client: ClientInfo = Depends(get_client),
+    r: aioredis.Redis = Depends(get_redis),
+) -> dict:
+    require_write(client, ns)
+    redis_key = build_key(ns, RANK_PREFIX, key)
+    deleted = await r.delete(redis_key)
+    if not deleted:
+        raise not_found(key, ns)
+    return ok({"deleted": True}, ns=ns, key=key, type="zset")
+
+
 @router.delete("/ns/{ns}/rank/{key}/{member}", summary="멤버 제거 (ZREM)")
 async def remove_rank(
     ns: str,
@@ -210,6 +227,10 @@ async def incr_rank(
 ) -> dict:
     require_write(client, ns)
     check_value_size(body.member, label="Member")
+    # nan/inf delta 거부 — inf는 ZINCRBY가 받아 inf로 저장하나 JSON 응답에서 null로 직렬화돼
+    # 회수 불가, +inf에 -inf delta는 NaN ResponseError(500) 유발. 입력단에서 차단.
+    if not math.isfinite(body.delta):
+        raise error("INVALID_VALUE", "Delta must be a finite number (nan/inf rejected)", status=400)
     redis_key = build_key(ns, RANK_PREFIX, key)
     # ZINCRBY는 기존 TTL을 보존(값을 모름) → zincrby+ttl 단일 파이프라인으로 보존 TTL을
     # meta에 보고(incr_kv와 동일 패턴 — 형제 엔드포인트 간 meta.ttl 비대칭 제거).

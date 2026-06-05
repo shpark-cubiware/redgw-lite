@@ -37,7 +37,7 @@ Stream 특성:
 
 from httpx import AsyncClient
 
-from tests.conftest import HRM_KEY, ERP_KEY, CRM_KEY
+from tests.conftest import HRM_KEY, ERP_KEY, CRM_KEY, MONITOR_KEY
 
 
 class TestEventCrud:
@@ -525,3 +525,53 @@ class TestEventAckValidation:
         )
         assert resp.status_code == 400
         assert resp.json()["detail"]["error"]["code"] == "INVALID_STREAM_ID"
+
+
+class TestEventDelete:
+    """전체 키 삭제 (DEL) — 스트림 통째 삭제"""
+
+    async def test_delete_whole_stream(self, client: AsyncClient):
+        """스트림 발행 후 전체 삭제 → 200, deleted=true. 이후 읽기 count=0(키 자체 소멸)."""
+        await client.post(
+            "/api/v1/ns/HRM/event/del-target",
+            headers={"X-API-Key": HRM_KEY},
+            json={"data": {"k": "v"}},
+        )
+        resp = await client.delete(
+            "/api/v1/ns/HRM/event/del-target",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"]["deleted"] is True
+        assert body["meta"]["type"] == "stream"
+
+        # 읽기로 키 소멸을 양적 확인 (queue len==0 / group·rank count==0과 대칭)
+        resp = await client.get(
+            "/api/v1/ns/HRM/event/del-target?last_id=0&count=10",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.json()["data"]["count"] == 0
+
+    async def test_delete_absent_stream_404(self, client: AsyncClient):
+        """없는 키 삭제 → 404 KEY_NOT_FOUND."""
+        resp = await client.delete(
+            "/api/v1/ns/HRM/event/no-such-key",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"]["code"] == "KEY_NOT_FOUND"
+
+    async def test_delete_requires_write(self, client: AsyncClient):
+        """read-only 키(MONITOR)는 전체 삭제 거부 → 403 NAMESPACE_DENIED."""
+        await client.post(
+            "/api/v1/ns/HRM/event/ro-guard",
+            headers={"X-API-Key": HRM_KEY},
+            json={"data": {"k": "v"}},
+        )
+        resp = await client.delete(
+            "/api/v1/ns/HRM/event/ro-guard",
+            headers={"X-API-Key": MONITOR_KEY},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"]["code"] == "NAMESPACE_DENIED"

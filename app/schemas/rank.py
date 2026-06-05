@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 class RankAddRequest(BaseModel):
     member: str = Field(..., min_length=1)
     score: float
-    ttl: int | None = Field(None, ge=0)
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)  # le: Redis EXPIRE 한계 초과 ttl의 500 누수 차단
 
 
 class RankMemberScore(BaseModel):
@@ -18,7 +18,7 @@ class RankMemberScore(BaseModel):
 
 class RankBatchAddRequest(BaseModel):
     members: list[RankMemberScore] = Field(..., min_length=1, max_length=100)
-    ttl: int | None = Field(None, ge=0)
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)  # le: Redis EXPIRE 한계 초과 ttl의 500 누수 차단
 
 
 class RankBatchGetRequest(BaseModel):

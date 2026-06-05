@@ -15,7 +15,7 @@ from app.schemas.common import ClientInfo
 from app.schemas.admin import TtlSetRequest
 from app.schemas.event import EventAckRequest, EventBatchPublishRequest, EventGroupCreateRequest, EventPublishRequest
 from app.utils.key_builder import EVENT_PREFIX, build_key
-from app.utils.response import error, ok
+from app.utils.response import error, not_found, ok
 from app.utils.ttl import touch_key
 from app.utils.validation import check_dict_values_size
 
@@ -178,6 +178,21 @@ async def ack_events(
     redis_key = build_key(ns, EVENT_PREFIX, key)
     acked = await r.xack(redis_key, group, *body.ids)
     return ok({"acked": acked}, ns=ns, key=key, type="stream")
+
+
+@router.delete("/ns/{ns}/event/{key}", summary="전체 삭제 (DEL)")
+async def delete_event(
+    ns: str,
+    key: str,
+    client: ClientInfo = Depends(get_client),
+    r: aioredis.Redis = Depends(get_redis),
+) -> dict:
+    require_write(client, ns)
+    redis_key = build_key(ns, EVENT_PREFIX, key)
+    deleted = await r.delete(redis_key)
+    if not deleted:
+        raise not_found(key, ns)
+    return ok({"deleted": True}, ns=ns, key=key, type="stream")
 
 
 @router.put("/ns/{ns}/event/{key}/touch", summary="TTL 갱신 (EXPIRE/PERSIST)")

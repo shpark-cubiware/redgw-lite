@@ -14,7 +14,7 @@ from app.schemas.common import ClientInfo
 from app.schemas.admin import TtlSetRequest
 from app.schemas.queue import QueueBatchPushRequest, QueuePushRequest, QueueTrimRequest
 from app.utils.key_builder import QUEUE_PREFIX, build_key
-from app.utils.response import error, ok
+from app.utils.response import error, not_found, ok
 from app.utils.ttl import resolve_ttl, touch_key
 from app.utils.validation import check_value_size
 
@@ -174,6 +174,21 @@ async def len_queue(
     redis_key = build_key(ns, QUEUE_PREFIX, key)
     length = await r.llen(redis_key)
     return ok({"length": length}, ns=ns, key=key, type="list")
+
+
+@router.delete("/ns/{ns}/queue/{key}", summary="전체 삭제 (DEL)")
+async def delete_queue(
+    ns: str,
+    key: str,
+    client: ClientInfo = Depends(get_client),
+    r: aioredis.Redis = Depends(get_redis),
+) -> dict:
+    require_write(client, ns)
+    redis_key = build_key(ns, QUEUE_PREFIX, key)
+    deleted = await r.delete(redis_key)
+    if not deleted:
+        raise not_found(key, ns)
+    return ok({"deleted": True}, ns=ns, key=key, type="list")
 
 
 @router.put("/ns/{ns}/queue/{key}/touch", summary="TTL 갱신 (EXPIRE/PERSIST)")

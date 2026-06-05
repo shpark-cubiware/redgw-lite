@@ -34,7 +34,7 @@ Sorted Set 특성:
 
 from httpx import AsyncClient
 
-from tests.conftest import HRM_KEY, ERP_KEY
+from tests.conftest import HRM_KEY, ERP_KEY, MONITOR_KEY
 
 
 class TestRankCrud:
@@ -642,6 +642,37 @@ class TestRankNanScore:
         assert resp.status_code == 400
         assert resp.json()["detail"]["error"]["code"] == "INVALID_VALUE"
 
+    # ── inf 점수 거부 — inf는 ZADD가 저장하나 JSON 응답에서 null로 직렬화돼 회수 불가 ──
+
+    async def test_add_rank_inf_score(self, client: AsyncClient):
+        """score=inf → 400(nan과 동일 정책). 미수정 시 Redis에 inf 저장 후 응답이 null로 누수."""
+        resp = await client.post(
+            "/api/v1/ns/ERP/rank/inf-zset",
+            headers=self._JSON,
+            content='{"member":"m1","score":Infinity}',
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["code"] == "INVALID_VALUE"
+
+    async def test_batch_add_rank_inf_score(self, client: AsyncClient):
+        resp = await client.post(
+            "/api/v1/ns/ERP/rank/inf-zset/batch",
+            headers=self._JSON,
+            content='{"members":[{"member":"m1","score":1.0},{"member":"m2","score":-Infinity}]}',
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["code"] == "INVALID_VALUE"
+
+    async def test_incr_rank_inf_delta(self, client: AsyncClient):
+        """incr delta=inf → 400. +inf에 -inf delta는 NaN ResponseError(500) 유발."""
+        resp = await client.post(
+            "/api/v1/ns/ERP/rank/inf-zset/incr",
+            headers=self._JSON,
+            content='{"member":"m1","delta":Infinity}',
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"]["code"] == "INVALID_VALUE"
+
 
 class TestRankBatchTtlZero:
     """rank 단일키 batch add ttl=0도 기존 TTL을 제거한다(R5 커버리지)."""
@@ -657,3 +688,53 @@ class TestRankBatchTtlZero:
         )
         assert resp.status_code == 200
         assert resp.json()["meta"]["ttl"] == -1
+
+
+class TestRankDelete:
+    """전체 키 삭제 (DEL) — 멤버 단위 ZREM과 구분되는 통째 삭제"""
+
+    async def test_delete_whole_rank(self, client: AsyncClient):
+        """Sorted Set 생성 후 전체 삭제 → 200, deleted=true. 이후 전체 조회 count=0(키 자체 소멸)."""
+        await client.post(
+            "/api/v1/ns/HRM/rank/del-target",
+            headers={"X-API-Key": HRM_KEY},
+            json={"member": "m1", "score": 1.0},
+        )
+        resp = await client.delete(
+            "/api/v1/ns/HRM/rank/del-target",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"]["deleted"] is True
+        assert body["meta"]["type"] == "zset"
+
+        # 전체 조회로 키 소멸을 양적 확인 (멤버 부재가 아니라 키 자체가 비어 있음)
+        resp = await client.get(
+            "/api/v1/ns/HRM/rank/del-target?start=0&stop=-1",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.json()["data"]["count"] == 0
+
+    async def test_delete_absent_rank_404(self, client: AsyncClient):
+        """없는 키 삭제 → 404 KEY_NOT_FOUND."""
+        resp = await client.delete(
+            "/api/v1/ns/HRM/rank/no-such-key",
+            headers={"X-API-Key": HRM_KEY},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"]["code"] == "KEY_NOT_FOUND"
+
+    async def test_delete_requires_write(self, client: AsyncClient):
+        """read-only 키(MONITOR)는 전체 삭제 거부 → 403 NAMESPACE_DENIED."""
+        await client.post(
+            "/api/v1/ns/HRM/rank/ro-guard",
+            headers={"X-API-Key": HRM_KEY},
+            json={"member": "m1", "score": 1.0},
+        )
+        resp = await client.delete(
+            "/api/v1/ns/HRM/rank/ro-guard",
+            headers={"X-API-Key": MONITOR_KEY},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"]["code"] == "NAMESPACE_DENIED"

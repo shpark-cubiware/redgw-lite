@@ -59,6 +59,41 @@ class TestApiKeyAuth:
         assert resp.status_code == 404
 
 
+class TestBuildKeyMapHardening:
+    """_build_key_map 강화 — 빈 api_key 미매핑, 예약 client_id 'admin' 무시."""
+
+    def _build(self, monkeypatch, clients: dict, admin_key: str = "admin_secret"):
+        from types import SimpleNamespace
+        import app.auth.api_key as ak
+
+        stub = SimpleNamespace(
+            admin=SimpleNamespace(api_key=admin_key),
+            clients={
+                cid: SimpleNamespace(api_key=k, description="d", namespaces={})
+                for cid, k in clients.items()
+            },
+        )
+        monkeypatch.setattr(ak, "get_settings", lambda: stub)
+        ak.reset_key_map()
+        try:
+            return ak._build_key_map()
+        finally:
+            ak.reset_key_map()  # 실제 config로 재구축되도록 캐시 비움(다른 테스트 오염 방지)
+
+    def test_empty_client_api_key_not_mapped(self, monkeypatch):
+        """빈 api_key 클라이언트는 매핑 제외 — 값 없는 'X-API-Key:' 헤더 우회 차단."""
+        m = self._build(monkeypatch, {"HRM": "hrm_key", "BROKEN": ""})
+        assert "" not in m
+        assert "hrm_key" in m
+
+    def test_reserved_admin_client_id_ignored(self, monkeypatch):
+        """config clients에 'admin' 이름 클라이언트 → admin 권한 탈취 방지로 무시."""
+        m = self._build(monkeypatch, {"admin": "rogue_key"}, admin_key="real_admin")
+        assert "rogue_key" not in m
+        # 진짜 admin은 admin.api_key에서만 등록
+        assert m["real_admin"].client_id == "admin"
+
+
 class TestNamespaceGuard:
     """네임스페이스 접근 권한 테스트"""
 

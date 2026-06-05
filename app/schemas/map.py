@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class MapSetRequest(BaseModel):
     fields: dict[str, str] = Field(..., min_length=1)
-    ttl: int | None = Field(None, ge=0)
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)  # le: Redis EXPIRE 한계 초과 ttl의 500 누수 차단
 
     @field_validator("fields")
     @classmethod
@@ -21,7 +21,7 @@ class MapSetRequest(BaseModel):
 
 class MapFieldSetRequest(BaseModel):
     value: str = Field(..., min_length=1)
-    ttl: int | None = Field(None, ge=0)
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)  # le: Redis EXPIRE 한계 초과 ttl의 500 누수 차단
 
 
 class MapBatchGetRequest(BaseModel):
@@ -30,7 +30,7 @@ class MapBatchGetRequest(BaseModel):
 
 class MapBatchSetRequest(BaseModel):
     items: dict[str, dict[str, str]] = Field(..., min_length=1, max_length=100)
-    ttl: int | None = Field(None, ge=0)
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)  # le: Redis EXPIRE 한계 초과 ttl의 500 누수 차단
 
     @field_validator("items")
     @classmethod

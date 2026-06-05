@@ -31,6 +31,19 @@ def _build_key_map() -> dict[str, ClientInfo]:
 
     # clients
     for client_id, cfg in settings.clients.items():
+        # 'admin'은 예약 client_id — require_admin이 client_id=="admin" 문자열 비교만으로 admin
+        # 권한을 부여하므로, config clients에 'admin' 이름을 두면 그 클라이언트가 namespaces와
+        # 무관하게 admin 권한을 얻는다. admin은 settings.admin.api_key에서만 등록한다.
+        if client_id == "admin":
+            logger.warning(
+                "client_id 'admin'은 예약됨 — clients의 'admin' 항목 무시(admin.api_key만 admin 부여)",
+            )
+            continue
+        # 빈 api_key는 매핑하지 않는다 — 빈 X-API-Key 헤더(값 없이 'X-API-Key:')가 이 클라이언트로
+        # 인증되는 우회를 차단(resolve_client("")가 None을 반환해 401이 되도록).
+        if not cfg.api_key:
+            logger.warning("client '%s'의 api_key가 비어 있음 — 매핑 제외", client_id)
+            continue
         mapping[cfg.api_key] = ClientInfo(
             client_id=client_id,
             description=cfg.description,

@@ -24,6 +24,7 @@ from app.utils.key_builder import (
     validate_ns,
 )
 from app.auth.namespace_guard import require_admin as _require_admin
+from app.auth.namespace_guard import require_read
 from app.utils.response import error, ok_simple
 
 logger = logging.getLogger("redgw.admin")
@@ -105,6 +106,9 @@ async def list_keys(
     # 입력 검증
     if ns:
         validate_ns(ns)
+        # 구체 NS 지정 시 데이터 플레인과 동일하게 read 권한 강제 — 타 NS 키 열거 차단.
+        # cross-NS 집계(ns=None list-all)는 현행 유지(모니터링 호환).
+        require_read(client, ns)
 
     search_pattern = build_scan_pattern(ns, type, pattern)
     next_cursor, keys = await r.scan(cursor=cursor, match=search_pattern, count=count)
@@ -129,6 +133,8 @@ async def key_info(
     client: ClientInfo = Depends(verify_api_key),
     r: aioredis.Redis = Depends(get_redis),
 ) -> dict:
+    # 단일 키 메타데이터(TTL/크기/encoding)도 데이터 플레인과 동일하게 read 권한 강제.
+    require_read(client, ns)
     prefix = resolve_type_prefix(type)
     redis_key = build_key(ns, prefix, key)
 
@@ -210,10 +216,12 @@ async def bulk_delete_keys(
         # 패턴에 도달해도 삭제 대상에서 제외).
         if not _is_storage_key(key):
             continue
-        keys_to_delete.append(key)
         if len(keys_to_delete) >= 10000:
-            truncated = True   # 1만 상한 도달 — 일부만 처리됨을 호출자에 알림(재실행 필요)
+            # 상한을 채운 뒤에도 매칭 키가 더 있음 → 잘림 확정(재실행 필요).
+            # 정확히 1만 개일 땐 루프가 자연 종료되어 미발동(이전 구현은 1만 번째에서 오탐).
+            truncated = True
             break
+        keys_to_delete.append(key)
 
     if dry_run:
         return ok_simple({"keys": sorted(keys_to_delete), "count": len(keys_to_delete), "truncated": truncated, "dry_run": True})

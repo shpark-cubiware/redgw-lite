@@ -34,6 +34,8 @@ _SECURITY_HEADERS = [
     (b"x-xss-protection", b"1; mode=block"),
     (b"referrer-policy", b"strict-origin-when-cross-origin"),
 ]
+# 헤더 이름 집합 — 응답마다 재생성하지 않도록 모듈 로드 시 1회 계산.
+_SECURITY_HEADER_NAMES = frozenset(n for n, _ in _SECURITY_HEADERS)
 
 
 class SecurityHeadersMiddleware:
@@ -50,8 +52,7 @@ class SecurityHeadersMiddleware:
         async def send_wrapper(message):
             if message["type"] == "http.response.start":
                 # 라우트가 동일 보안 헤더를 이미 설정했으면 중복 방지 — 우리 값으로 통일.
-                sec_names = {n for n, _ in _SECURITY_HEADERS}
-                headers = [(n, v) for (n, v) in message.get("headers", []) if n not in sec_names]
+                headers = [(n, v) for (n, v) in message.get("headers", []) if n not in _SECURITY_HEADER_NAMES]
                 headers.extend(_SECURITY_HEADERS)
                 message["headers"] = headers
             await send(message)

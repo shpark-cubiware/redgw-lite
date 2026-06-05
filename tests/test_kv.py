@@ -58,6 +58,18 @@ class TestKvCrud:
         assert resp.status_code == 200
         assert resp.json()["data"]["value"] == "running"
 
+    async def test_set_oversized_ttl_rejected(self, client: AsyncClient):
+        """Redis EXPIRE 한계 초과 ttl → 422(입력 검증). 미수정 시 setex가 ResponseError→500.
+
+        스키마 le 바운드가 입력단에서 차단하므로 Redis까지 도달하지 않는다(KvIncrRequest.delta와 동일 취지).
+        """
+        resp = await client.put(
+            "/api/v1/ns/HRM/kv/big-ttl",
+            headers={"X-API-Key": HRM_KEY},
+            json={"value": "v", "ttl": 10_000_000_000_000_000},  # 1e16 > Redis 한계
+        )
+        assert resp.status_code == 422
+
     async def test_get_not_found(self, client: AsyncClient):
         """존재하지 않는 키 조회 → 404 KEY_NOT_FOUND"""
         resp = await client.get(

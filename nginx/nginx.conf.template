@@ -94,6 +94,26 @@ http {
             index index.html;
             add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; frame-ancestors 'none'" always;
             add_header X-Content-Type-Options nosniff always;
+            # 정적 튜토리얼은 자주 갱신 — 매 요청 ETag 재검증(미변경 시 304). 구버전 캐시 고착 방지.
+            add_header Cache-Control "no-cache" always;
+        }
+
+        # ─── API Demo 정적 페이지 (tutorial과 동형 + 큐비웨어 CI 디자인) ──
+        # 자산은 모두 /demo/ 하위(폰트·index)로 self-host, mermaid만 /usermanual/lib
+        # (same-origin)에서 로드 → CSP default-src 'self'로 충족.
+        location = /demo { return 301 /demo/; }
+        location = /demo/env.js {
+            alias /tmp/demo-env.js;
+            add_header Content-Type "application/javascript; charset=utf-8" always;
+            add_header Cache-Control "no-store" always;
+        }
+        location /demo/ {
+            alias /usr/share/nginx/html/demo/;
+            index index.html;
+            add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; frame-ancestors 'none'" always;
+            add_header X-Content-Type-Options nosniff always;
+            # 정적 데모는 자주 갱신 — 매 요청 ETag 재검증(미변경 시 304). 구버전 캐시 고착 방지.
+            add_header Cache-Control "no-cache" always;
         }
 
         # ─── 사용자 메뉴얼 정적 페이지 ──────────────────────────
@@ -103,6 +123,8 @@ http {
             index index.html;
             add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'" always;
             add_header X-Content-Type-Options nosniff always;
+            # 정적 메뉴얼은 자주 갱신 — 매 요청 ETag 재검증(미변경 시 304). 구버전 캐시 고착 방지.
+            add_header Cache-Control "no-cache" always;
         }
 
         # ─── WebSocket 프록시 (/ws/ → /api/v1/ws/) ────────────
@@ -187,6 +209,24 @@ http {
             index index.html;
             add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; frame-ancestors 'none'" always;
             add_header X-Content-Type-Options nosniff always;
+            # 정적 튜토리얼은 자주 갱신 — 매 요청 ETag 재검증(미변경 시 304). 구버전 캐시 고착 방지.
+            add_header Cache-Control "no-cache" always;
+        }
+
+        # API Demo 정적 페이지 (HTTP)
+        location = /demo { return 301 /demo/; }
+        location = /demo/env.js {
+            alias /tmp/demo-env.js;
+            add_header Content-Type "application/javascript; charset=utf-8" always;
+            add_header Cache-Control "no-store" always;
+        }
+        location /demo/ {
+            alias /usr/share/nginx/html/demo/;
+            index index.html;
+            add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; frame-ancestors 'none'" always;
+            add_header X-Content-Type-Options nosniff always;
+            # 정적 데모는 자주 갱신 — 매 요청 ETag 재검증(미변경 시 304). 구버전 캐시 고착 방지.
+            add_header Cache-Control "no-cache" always;
         }
 
         # 사용자 메뉴얼 정적 페이지 (HTTP)
@@ -196,6 +236,8 @@ http {
             index index.html;
             add_header Content-Security-Policy "default-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'" always;
             add_header X-Content-Type-Options nosniff always;
+            # 정적 메뉴얼은 자주 갱신 — 매 요청 ETag 재검증(미변경 시 304). 구버전 캐시 고착 방지.
+            add_header Cache-Control "no-cache" always;
         }
 
         # Tutorial 페이지용 API 프록시 (HTTP) — /api/v1 이하 모든 엔드포인트

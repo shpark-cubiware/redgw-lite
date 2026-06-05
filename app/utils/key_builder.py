@@ -155,6 +155,10 @@ def resolve_type_prefix(type_name: str) -> str:
     return prefix
 
 
+# SCAN 패턴 허용 문자 — 저장 키 charset + glob 메타문자(`*`,`?`). 그 외(`[`,`]`,`\`,공백 등) 거부.
+_SCAN_PATTERN_RE = re.compile(r"^[A-Za-z0-9_.:/*?\-]*$")
+
+
 def build_scan_pattern(ns: str | None, type_name: str | None, pattern: str = "*") -> str:
     """SCAN 검색 패턴 구성 — ns, type, pattern 조합.
 
@@ -162,8 +166,14 @@ def build_scan_pattern(ns: str | None, type_name: str | None, pattern: str = "*"
     type_name이 주어졌으나 미등록이면 resolve_type_prefix가 INVALID_TYPE(400)을 던져
     조용한 전체타입 확장(예: 오타 type → ns 전체 삭제)을 막는다.
 
+    pattern은 저장 키 charset([A-Za-z0-9_.:/-])에 glob 메타문자 `*`/`?`만 더한 집합으로
+    제한한다. `[` `]` `\\`는 정상 키에 나타날 수 없고 glob 문자클래스/이스케이프만 가능케 하므로
+    거부 — 앵커링·결과필터(STORAGE_PREFIXES)에 더해 빌더 자체를 입력단에서 안전화한다.
+
     주의: glob `*:*:{pattern}`은 콜론 3개 이상인 내부키(`__redgw:status_monitor:tick` 등)도
     매칭하므로, 내부키 배제는 호출부의 결과 필터(STORAGE_PREFIXES)로 보강해야 한다."""
+    if not _SCAN_PATTERN_RE.match(pattern):
+        raise error("INVALID_KEY", "Invalid scan pattern: only key chars and '*'/'?' are allowed", status=400)
     prefix = resolve_type_prefix(type_name) if type_name else "*"
     ns_part = ns if ns else "*"
     return f"{ns_part}:{prefix}:{pattern}"

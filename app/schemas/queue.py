@@ -10,13 +10,13 @@ from pydantic import BaseModel, Field, field_validator
 class QueuePushRequest(BaseModel):
     value: str = Field(..., min_length=1)
     direction: Literal["left", "right"] = "right"
-    ttl: int | None = Field(None, ge=0)
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)  # le: Redis EXPIRE 한계 초과 ttl의 500 누수 차단
 
 
 class QueueBatchPushRequest(BaseModel):
     values: list[str] = Field(..., min_length=1, max_length=100)  # each value validated below
     direction: Literal["left", "right"] = "right"
-    ttl: int | None = Field(None, ge=0)
+    ttl: int | None = Field(None, ge=0, le=9_999_999_999)  # le: Redis EXPIRE 한계 초과 ttl의 500 누수 차단
 
     @field_validator("values")
     @classmethod

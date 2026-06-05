@@ -95,10 +95,12 @@ services:
     command:
       - sh
       - -c
-      - "until [ -f /etc/nginx/nginx.conf.template ]; do sleep 0.1; done && envsubst '$$REDGW_ADMIN_API_KEY' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'"
+      - "until [ -f /etc/nginx/nginx.conf.template ]; do sleep 0.1; done && envsubst '$$REDGW_ADMIN_API_KEY' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && envsubst '$$REDGW_CLIENT_HRM_API_KEY $$REDGW_CLIENT_ERP_API_KEY $$REDGW_CLIENT_CRM_API_KEY $$REDGW_CLIENT_MONITOR_API_KEY $$REDGW_ADMIN_API_KEY' < /etc/nginx/demo-env.js.template > /tmp/demo-env.js && exec nginx -g 'daemon off;'"
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./nginx/demo/env.js.template:/etc/nginx/demo-env.js.template:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+      - ./nginx/demo:/usr/share/nginx/html/demo:ro
     depends_on:
       - redgw
     networks:
